@@ -15,6 +15,10 @@ import {
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
+const BRIDGE_BACKLOG_LIMIT = 256;
+const BRIDGE_BACKLOG_ERROR =
+  "code mode bridge backlog exceeded; await results or split the work into smaller batches.";
+
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -258,6 +262,114 @@ describe("Code Mode runtime and output limits", () => {
     expect(result).toMatchObject({
       code: "snapshot_limit_exceeded",
       error: "code mode snapshot limit exceeded",
+    });
+  });
+
+  it("accepts 256 outstanding bridge registrations in one worker frontier", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: `return await Promise.all(
+          Array.from({ length: ${BRIDGE_BACKLOG_LIMIT} }, (_, index) =>
+            tools.callValue("fake_backlog", { index }),
+          ),
+        );`,
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+
+    expect(result.status).toBe("waiting");
+    if (result.status !== "waiting") {
+      return;
+    }
+    expect(result.pendingRequests).toHaveLength(BRIDGE_BACKLOG_LIMIT);
+  });
+
+  it("rejects a 257th bridge registration before host dispatch", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const target = pluginTool("fake_backlog", "Backlog limit helper");
+    applyCodeModeCatalog({
+      tools: [...tools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(tools[0], "Code Mode exec test invariant").execute(
+        "code-call-backlog-overflow",
+        {
+          code: `return await Promise.all(
+            Array.from({ length: ${BRIDGE_BACKLOG_LIMIT + 1} }, (_, index) =>
+              tools.callValue("fake_backlog", { index }),
+            ),
+          );`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      error: BRIDGE_BACKLOG_ERROR,
+      bridgeDispatchStarted: false,
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("counts carried requests when enforcing the resumed bridge backlog", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const first = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: `
+          const pending = Array.from({ length: ${BRIDGE_BACKLOG_LIMIT - 1} }, (_, index) =>
+            tools.callValue("fake_backlog", { index }),
+          );
+          await tools.callValue("fake_gate", {});
+          void tools.callValue("fake_backlog", { index: ${BRIDGE_BACKLOG_LIMIT} });
+          void tools.callValue("fake_backlog", { index: ${BRIDGE_BACKLOG_LIMIT + 1} });
+          return await Promise.all(pending);
+        `,
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+    expect(first.status).toBe("waiting");
+    if (first.status !== "waiting") {
+      return;
+    }
+    expect(first.pendingRequests).toHaveLength(BRIDGE_BACKLOG_LIMIT);
+    const gate = first.pendingRequests.at(-1);
+    expect(gate).toBeDefined();
+    if (!gate) {
+      return;
+    }
+
+    const resumed = await testing.runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshotBytes: first.snapshotBytes,
+        config,
+        settledRequests: [{ id: gate.id, ok: true, value: {} }],
+        pendingRequests: first.pendingRequests.slice(0, -1),
+      },
+      10_000,
+    );
+
+    expect(resumed).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      error: BRIDGE_BACKLOG_ERROR,
+      bridgeDispatchStarted: false,
     });
   });
 

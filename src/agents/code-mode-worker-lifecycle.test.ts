@@ -3,6 +3,7 @@ import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
+  CodeModeBridgeDispatchQueue,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
   reserveActiveRunSlot,
@@ -51,6 +52,7 @@ function parkExpiringRun(
     parentToolCallId: "code-mode-lifecycle",
     ctx,
     config,
+    bridgeDispatchQueue: new CodeModeBridgeDispatchQueue(config.maxPendingToolCalls),
     runtime,
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: [],

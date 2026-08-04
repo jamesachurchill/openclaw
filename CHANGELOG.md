@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Code Mode replay safety:** keep restart-recovery restrictions host-owned by removing the model-facing `restartSafe` exec argument and ignoring raw model attempts to enable or weaken replay policy.
+- **Code Mode nested concurrency:** queue nested bridge calls above `maxPendingToolCalls` at the host boundary instead of rejecting the guest's next promise registration, while preserving the configured execution cap, atomically rejecting VM frontiers above the fixed internal bridge-backlog ceiling, and cancelling queued work without dispatching it.
 - **Guided onboarding skip-UI routing:** keep `openclaw onboard --skip-ui` and `openclaw setup --skip-ui` on guided onboarding while skipping both browser and terminal handoffs, instead of silently switching to the classic wizard. Thanks @shakkernerd.
 - **Telegram durable ingress:** preserve pre-identity control-lane ownership during replay and attempt each drain snapshot row only once per pass, preventing targeted commands from spinning the spool and blocking polling shutdown.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
