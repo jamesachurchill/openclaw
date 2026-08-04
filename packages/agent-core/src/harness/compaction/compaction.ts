@@ -646,12 +646,19 @@ async function runSummarizationCompletion(params: {
     );
   }
 
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+  const summary = response.content
+    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
+  if (!summary.trim()) {
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        `${params.errorLabel} failed: model returned no summary text`,
+      ),
+    );
+  }
+  return ok(summary);
 }
 
 /** Generate or update a conversation summary for compaction. */
