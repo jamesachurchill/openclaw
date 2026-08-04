@@ -73,8 +73,9 @@ behavior, or model selection.
   of full tool schemas.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
-- Fewer model round trips: a declared output contract lets the model call and
-  transform a tool result in one `exec`; unknown outputs remain raw-first.
+- Fewer model round trips: a declared output contract lets the model perform
+  deterministic transforms in one `exec`; unknown outputs remain raw-first,
+  while identity-dependent mutations retain a model-observation boundary.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
   depending on provider-native code execution.
 - Fails closed: if code mode is enabled but the QuickJS-WASI runtime is
@@ -159,6 +160,12 @@ const [shipmentTool] = await tools.search("list shipments");
 const shipments = await tools.callValue(shipmentTool.id, {});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
+
+This is a deterministic transform over declared fields. A declared output
+schema describes JSON structure only; it does not prove entity identity,
+uniqueness, permissions, or semantic correctness. If a later mutation depends
+on choosing or interpreting an entity, return the candidates for model
+observation first and perform the mutation only in a later `exec`.
 
 When a quick-index line ends in `-> ?`, the output shape is unknown. The first
 `exec` must return `await tools.callValue(...)` unchanged. A later `exec` can
@@ -541,6 +548,10 @@ read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
 
 The arrow in each quick-index line describes the `tools.callValue(...)` value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
+Declared hints establish structure, not the identity, uniqueness, permissions,
+or semantic correctness of a selected entity. Deterministic transforms may
+stay inline, but entity-dependent mutations must return candidates for model
+observation before acting in a later `exec`.
 Unknown outputs stay raw-first: return the value unchanged, observe it, then
 filter or map it in a later `exec` instead of guessing field names. This also
 applies when a declared-output read feeds a final `-> ?` call: return that
@@ -681,15 +692,25 @@ metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
 change state plus diff/patch data; and apply-patch path summaries. When the
-quick index declares the fields, one cell can compose discovery and delivery
-without a separate inspection turn:
+quick index declares the fields, one cell can perform deterministic transforms
+without a separate inspection turn. A schema does not establish which
+semantically matched entity is the correct mutation target. Return candidates
+before acting:
 
 ```javascript
 const listed = await tools.conversations_list({ query: "build bot" });
-const target = listed.conversations.find((item) => item.label === "Build bot");
-if (!target) throw new Error("conversation not found");
+return listed.conversations.map(({ conversationRef, label }) => ({
+  conversationRef,
+  label,
+}));
+```
+
+After the model observes the candidates and identifies the exact target, a
+later `exec` can perform the mutation:
+
+```javascript
 return await tools.conversations_send({
-  conversationRef: target.conversationRef,
+  conversationRef: "exact-observed-conversation-ref",
   message: "Build finished.",
 });
 ```

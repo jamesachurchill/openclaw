@@ -215,8 +215,12 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("process them in the first exec");
-    expect(execTool.description).toContain("do not spend another exec inspecting");
+    expect(execTool.description).toContain("Declared output schemas prove structure");
+    expect(execTool.description).toContain(
+      "not entity identity, uniqueness, permission, or semantic correctness",
+    );
+    expect(execTool.description).toContain("Transform deterministically inline");
+    expect(execTool.description).toContain("return candidates for model observation; mutate later");
     expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
     expect(execTool.description).toContain("normal tool policy and approvals");
     expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
@@ -246,16 +250,24 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
 
     expect(parameters.properties?.code?.description).toContain("no Python, shell");
+    expect(parameters.properties?.code?.description).toContain("trailing expressions yield `null`");
     expect(parameters.properties?.code?.description).toContain(
-      "a trailing expression is discarded and yields `null`",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      'tools.callValue("openclaw:core:read", { path: "notes.txt" })',
+      'tools.callValue("openclaw:core:read",{path:"notes.txt"})',
     );
     expect(parameters.properties?.code?.description).toContain("Use `callValue`, not `call`");
-    expect(parameters.properties?.code?.description).toContain("return file.content");
+    expect(parameters.properties?.code?.description).toContain('r.kind==="text"?r.content:r');
+    expect(parameters.properties?.code?.description).not.toContain("return file.content");
     expect(parameters.properties?.code?.description).toContain(
       "return it first, then parse it in a later exec",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Declared schemas prove structure only",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "before a mutation needing entity identity, uniqueness, permission, or interpretation",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "return candidates; act in a later exec",
     );
     expect(parameters.properties?.code?.description).toContain(
       "exact ids from `ALL_TOOLS` or `tools.search(query)`",

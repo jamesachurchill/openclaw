@@ -74,7 +74,7 @@ const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 const CODE_MODE_CATALOG_INDEX_HEADING = [
   "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
   "Each line is `id input -> output`; `-> ?` means unknown.",
-  "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+  "OUTPUT DECLARED RULE: schema is structure, not identity/uniqueness/permission/meaning; transform inline, return candidates before a dependent mutation.",
   "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
 ].join("\n");
 
@@ -163,7 +163,7 @@ function createCodeModeExecDescription(
     : "";
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back; otherwise the result is `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. For declared fields, process them in the first exec; do not spend another exec inspecting them. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. `ALL_TOOLS` is the complete compact catalog. Select exact ids directly or with `tools.search(query: string, options?)`; use `tools.describe(id: string)` only when needed. Never invent or transform a tool id. `tools.callValue(id: string, args?)` returns its JSON value directly; `tools.call(id: string, args?)` preserves `{ tool, result }`. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions." +
+    "Use `return` to pass the final value back; else `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. Declared output schemas prove structure, not entity identity, uniqueness, permission, or semantic correctness. Transform deterministically inline. Before a selection-dependent mutation, return candidates for model observation; mutate later. Perform dependent reads, checks, and follow-up calls in order; parallelize independent work only. For an unknown output, including a final dependent call after declared-output calls, return the raw tool value unchanged; do not wrap it in the requested answer shape or guess fields; filter or map it only in a later exec. Nested calls enforce normal tool policy and approvals. `ALL_TOOLS` is the complete compact catalog. Select exact ids directly or with `tools.search(query: string, options?)`; use `tools.describe(id: string)` only when needed. Never invent or transform a tool id. `tools.callValue(id: string, args?)` returns its JSON value directly; `tools.call(id: string, args?)` preserves `{ tool, result }`. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; use enabled catalog tools allowed by policy for shell, file, network, or external actions." +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
@@ -187,7 +187,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       // model-facing field prevents schema-valid empty calls from constrained models.
       code: Type.String({
         description:
-          'Required JS/TS; no Python, shell, `require`, `import`. Use explicit `return value`; a trailing expression is discarded and yields `null`. Use `callValue`, not `call`, for data; `call` wraps it under `.result`. Core text reads: `{kind:"text",content:string}`; use `.content`. Unknown format: return it first, then parse it in a later exec; never guess separators. Example: `const file=await tools.callValue("openclaw:core:read", { path: "notes.txt" }); if(file.kind!=="text") return file; return file.content;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never invent ids or parallelize dependent calls.',
+          'Required JS/TS; no Python, shell, `require`, `import`. Use `return value`; trailing expressions yield `null`. Use `callValue`, not `call`. Declared schemas prove structure only: transform deterministically inline; before a mutation needing entity identity, uniqueness, permission, or interpretation, return candidates; act in a later exec. Unknown: return it first, then parse it in a later exec. Read: `const r=await tools.callValue("openclaw:core:read",{path:"notes.txt"}); return r.kind==="text"?r.content:r;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never parallelize dependent calls.',
       }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
