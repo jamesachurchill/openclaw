@@ -2,48 +2,61 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
-
-function renderComposer(overrides: Partial<ComposerProps>) {
-  const container = document.createElement("div");
-  render(
-    renderChatComposer({
-      paneId: crypto.randomUUID(),
-      sessionKey: "main",
-      currentAgentId: "main",
-      connected: true,
-      canSend: true,
-      disabledReason: null,
-      sending: false,
-      messages: [],
-      stream: null,
-      queue: [],
-      draft: "",
-      sessions: null,
-      assistantName: "OpenClaw",
-      onDraftChange: vi.fn(),
-      onSend: vi.fn(),
-      onQueueRemove: vi.fn(),
-      onNewSession: vi.fn(),
-      ...overrides,
-    }),
-    container,
-  );
-  return container;
-}
-
-afterEach(() => {
-  resetChatComposerState();
-  document.body.replaceChildren();
+afterEach(async () => {
+  await resetComposerFixture();
 });
 
 describe("archived session composer banner", () => {
+  it("keeps the focused action through a banner refresh and uses the current action", () => {
+    const initialAction = vi.fn();
+    const refreshedAction = vi.fn();
+    const { container, props } = renderComposerFixture({
+      canSend: false,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "This session is archived.",
+        actionLabel: "Unarchive",
+        onAction: initialAction,
+      },
+    });
+    document.body.append(container);
+    const action = container.querySelector<HTMLButtonElement>(
+      ".agent-chat__disabled-banner button",
+    )!;
+    action.focus();
+    const banner = action.parentElement;
+
+    render(
+      renderChatComposer({
+        ...props,
+        disabledBanner: {
+          kind: "composer-replacement",
+          text: "This session is still archived.",
+          actionLabel: "Unarchive",
+          onAction: refreshedAction,
+        },
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
+      "This session is still archived.",
+    );
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBe(banner);
+    expect(container.querySelector(".agent-chat__disabled-banner button")).toBe(action);
+    expect(document.activeElement).toBe(action);
+    action.click();
+    expect(initialAction).not.toHaveBeenCalled();
+    expect(refreshedAction).toHaveBeenCalledOnce();
+  });
+
   it("disables its action with the mutation reason", () => {
     const onAction = vi.fn();
     const reason = "Operator write access is required.";
-    const container = renderComposer({
+    const { container } = renderComposerFixture({
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
@@ -64,7 +77,7 @@ describe("archived session composer banner", () => {
   });
 
   it("renders a standard primary action with progress feedback", () => {
-    const container = renderComposer({
+    const { container } = renderComposerFixture({
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",

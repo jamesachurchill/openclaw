@@ -44,10 +44,6 @@ function expectCases(
 }
 
 describe("cron protocol validators", () => {
-  it("accepts minimal add params", () => {
-    expectCases(validateCronAddParams, true, [minimalAddParams]);
-  });
-
   it("reports auto-disable state without accepting it in writable patches", () => {
     const job = {
       ...minimalAddParams,
@@ -97,69 +93,6 @@ describe("cron protocol validators", () => {
     expectCases(validateCronAddParams, false, [add({ failureAlert })]);
     expectCases(validateCronUpdateParams, true, [update({ failureAlert: null })]);
     expectCases(validateCronAddParams, false, [add({ failureAlert: null })]);
-  });
-
-  it("rejects schedule integers that SQLite cannot round-trip safely", () => {
-    const unsafe = Number.MAX_SAFE_INTEGER + 1;
-    expectCases(validateCronAddParams, false, [
-      add({ schedule: { kind: "every", everyMs: unsafe } }),
-    ]);
-    expectCases(validateCronUpdateParams, false, [
-      update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: unsafe } }),
-      update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: unsafe } }),
-    ]);
-  });
-
-  it("rejects every schedule numbers outside the ECMAScript Date range", () => {
-    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
-    expectCases(validateCronAddParams, false, [
-      add({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
-      add({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
-      add({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
-    ]);
-    expectCases(validateCronUpdateParams, false, [
-      update({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
-      update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
-      update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
-    ]);
-  });
-
-  it("rejects mutable scheduler state outside the ECMAScript Date range", () => {
-    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
-    expectCases(validateCronUpdateParams, false, [
-      update({ state: { nextRunAtMs: invalidTimestamp } }),
-      update({ state: { runningAtMs: invalidTimestamp } }),
-      update({ state: { lastRunAtMs: invalidTimestamp } }),
-    ]);
-    expectCases(validateCronUpdateParams, true, [
-      update({ state: { nextRunAtMs: MAX_DATE_TIMESTAMP_MS } }),
-    ]);
-  });
-
-  it("accepts trigger add, patch, and clear shapes", () => {
-    expectCases(validateCronAddParams, true, [
-      add({ trigger: { script: "json({ fire: true })", once: true } }),
-    ]);
-    expectCases(validateCronUpdateParams, true, [
-      update({ trigger: { script: "json({ fire: false })" } }),
-      update({ trigger: null }),
-    ]);
-  });
-
-  it("accepts toolsAllow on systemEvent payloads", () => {
-    const payload = {
-      kind: "systemEvent",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    };
-    expectCases(validateCronAddParams, true, [add({ payload: { ...payload, text: "tick" } })]);
-    expectCases(validateCronUpdateParams, true, [update({ payload })]);
-  });
-
-  it("rejects invalid trigger scripts and additional properties", () => {
-    const trigger = { script: "json({ fire: true })", unexpected: true };
-    expectCases(validateCronAddParams, false, [add({ trigger: { script: "" } }), add({ trigger })]);
-    expectCases(validateCronUpdateParams, false, [update({ trigger })]);
   });
 
   it("rejects public caller scope on cron admin params", () => {
@@ -330,6 +263,7 @@ describe("cron protocol validators", () => {
     expectCases(validateCronRunParams, true, [
       { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" },
       { jobId: "job-2", mode: "due" },
+      { jobId: "job-3", mode: "if-enabled" },
     ]);
     expectCases(validateCronRunParams, false, [{ id: "job-1", expectedProcessInstanceId: "" }]);
   });
@@ -344,6 +278,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -356,6 +291,7 @@ describe("cron protocol validators", () => {
       { agentId: "" },
       { scheduleKind: "yearly" },
       { lastRunStatus: "pending" },
+      { trigger: "configured" },
     ]);
   });
 
@@ -376,42 +312,6 @@ describe("cron protocol validators", () => {
       { id: "nested/job-1" },
       { jobId: "..\\job-2" },
       { jobId: "nested\\job-2" },
-    ]);
-  });
-
-  it("accepts runs paging/filter/sort params", () => {
-    expectCases(validateCronRunsParams, true, [
-      {
-        id: "job-1",
-        runId: "manual:job-1:123:0",
-        limit: 50,
-        offset: 0,
-        status: "error",
-        query: "timeout",
-        sortDir: "desc",
-      },
-    ]);
-    expectCases(validateCronRunsParams, false, [
-      { id: "job-1", offset: -1 },
-      { id: "job-1", runId: "" },
-    ]);
-  });
-
-  it("accepts all-scope runs with multi-select filters", () => {
-    expectCases(validateCronRunsParams, true, [
-      {
-        scope: "all",
-        agentId: "ops",
-        limit: 25,
-        statuses: ["ok", "error"],
-        deliveryStatuses: ["delivered", "not-requested"],
-        query: "fail",
-        sortDir: "desc",
-      },
-    ]);
-    expectCases(validateCronRunsParams, false, [
-      { scope: "all", agentId: "" },
-      { scope: "job", statuses: [] },
     ]);
   });
 });

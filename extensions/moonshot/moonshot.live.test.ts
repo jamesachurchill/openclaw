@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 // Moonshot tests cover moonshot plugin behavior.
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -93,7 +94,7 @@ describeLive("moonshot plugin live", () => {
       },
     } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let result: Record<string, unknown> | undefined;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -116,15 +117,32 @@ describeLive("moonshot plugin live", () => {
     }
 
     expect(result?.provider).toBe("kimi");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
+    expect(result?.count).toBe(1);
+    expect(result?.results).toEqual([
+      expect.objectContaining({
+        title: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+        url: expect.stringMatching(/^https?:\/\//),
+        description: expect.any(String),
+      }),
+    ]);
   }, 180_000);
 });
 
 function resolveMoonshotModels(modelId: string): Model<"openai-completions">[] {
   const provider = buildMoonshotProvider();
-  const model = provider.models.find((entry) => entry.id === modelId);
+  // K2.6 still has a documented replay contract outside the recommended model catalog.
+  const model =
+    modelId === "kimi-k2.6"
+      ? {
+          id: modelId,
+          name: "Kimi K2.6",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262_144,
+          maxTokens: 32_768,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }
+      : provider.models.find((entry) => entry.id === modelId);
   if (!model) {
     throw new Error(`Moonshot catalog does not include ${modelId}`);
   }
@@ -145,11 +163,9 @@ function createNoopTool(): Tool {
   };
 }
 
-async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantMessage; error?: AssistantMessage }>,
-): Promise<AssistantMessage> {
+async function collectDoneMessage(stream: ReturnType<StreamFn>): Promise<AssistantMessage> {
   let doneMessage: AssistantMessage | undefined;
-  for await (const event of stream) {
+  for await (const event of await stream) {
     if (event.type === "error") {
       throw new Error(event.error?.errorMessage || "Moonshot live request failed");
     }
@@ -205,11 +221,7 @@ async function proveK3NativeVideoRegion(baseUrl: string, apiKey: string) {
     ],
   };
   const response = await collectDoneMessage(
-    (await wrapped(model, context as never, { apiKey, maxTokens: 128 })) as AsyncIterable<{
-      type: string;
-      message?: AssistantMessage;
-      error?: AssistantMessage;
-    }>,
+    wrapped(model, context as never, { apiKey, maxTokens: 128 }),
   );
   const answer = response.content
     .filter((block) => block.type === "text")
@@ -288,11 +300,7 @@ describeModelLive("moonshot K2.6 replay live", () => {
           onPayload: (value) => {
             payload = value as Record<string, unknown>;
           },
-        }) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        }),
       );
 
       const messages = payload?.messages as Array<Record<string, unknown>> | undefined;
@@ -354,11 +362,7 @@ describeModelLive("moonshot K2.7 Code live", () => {
               firstPayload = payload as Record<string, unknown>;
             },
           },
-        ) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        ),
       );
 
       expect(firstPayload).toBeDefined();
@@ -404,11 +408,7 @@ describeModelLive("moonshot K2.7 Code live", () => {
           onPayload: (payload) => {
             secondPayload = payload as Record<string, unknown>;
           },
-        }) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        }),
       );
 
       expect(secondPayload).toBeDefined();
@@ -487,11 +487,7 @@ describeModelLive("moonshot K3 live", () => {
               payload.tool_choice = "required";
             },
           },
-        ) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        ),
       );
 
       expect(capturedPayload).toBeDefined();

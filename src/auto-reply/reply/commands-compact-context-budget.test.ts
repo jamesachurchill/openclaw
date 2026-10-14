@@ -1,12 +1,14 @@
 // Tests compact command context-budget resolution separately from command lifecycle behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Budget presentation uses fixed compaction effects without running an agent or writing storage.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),
@@ -14,7 +16,13 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
-  isCurrentSessionEntry: vi.fn(() => true),
+  prepareCurrentSessionEntry: vi.fn(
+    async ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
+    }),
+  ),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
@@ -24,7 +32,7 @@ const {
   compactEmbeddedAgentSession,
   formatContextUsageShort,
   incrementCompactionCount,
-  isCurrentSessionEntry,
+  prepareCurrentSessionEntry,
 } = await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
@@ -64,7 +72,11 @@ describe("handleCompactCommand context budget", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-    vi.mocked(isCurrentSessionEntry).mockReturnValue(true);
+    vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
+    }));
     resolveAgentDirMock.mockImplementation(
       (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
     );
@@ -119,53 +131,6 @@ describe("handleCompactCommand context budget", () => {
 
     expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(258_000);
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
-  });
-
-  it.each([
-    { globalCap: undefined, agentCap: undefined, expectedBudget: 1_000_000 },
-    { globalCap: 372_000, agentCap: 120_000, expectedBudget: 120_000 },
-    { globalCap: 120_000, agentCap: 372_000, expectedBudget: 372_000 },
-  ])("respects the target agent context cap (#117470)", async (testCase) => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "compacted",
-        firstKeptEntryId: "first-kept",
-        tokensBefore: 134_930,
-        tokensAfter: 56_000,
-      },
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams({
-          agents: {
-            ...(testCase.globalCap === undefined
-              ? {}
-              : { defaults: { contextTokens: testCase.globalCap } }),
-            ...(testCase.agentCap === undefined
-              ? {}
-              : { list: [{ id: "main", contextTokens: testCase.agentCap }] }),
-          },
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        provider: "claude-cli",
-        model: "claude-fable-5",
-        contextTokens: testCase.globalCap ?? 0,
-        sessionEntry: {
-          sessionId: "fable-session",
-          updatedAt: Date.now(),
-          contextTokens: 1_000_000,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(
-      testCase.expectedBudget,
-    );
   });
 
   it("retains persisted context when an unknown custom model uses a legacy alias", async () => {

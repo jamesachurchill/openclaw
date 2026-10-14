@@ -13,19 +13,36 @@ import { NonEmptyString } from "./primitives.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CronJobNotFoundErrorDetails,
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
+  type OutboundDeliveryQueuedErrorDetails,
   type MissingScopeErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
   type ProjectCloneErrorDetails,
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SetupAdmissionBusyErrorDetails,
+  type GitHubPublicationSelectionRejectedErrorDetails,
+  type SessionWorkspaceRecoveryRequiredErrorDetails,
+  type TaskWorktreeSourceRequiredErrorDetails,
+  type ClawHubRiskAcknowledgementRequiredErrorDetails,
+  type ClawReviewRequiredErrorDetails,
+  readClawHubRiskAcknowledgementRequiredError,
+  readClawReviewRequiredError,
+  readGitHubPublicationSelectionRejectedError,
+  readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
+
+export const CronJobNotFoundErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND),
+  jobId: NonEmptyString,
+});
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export const MissingScopeErrorDetailsSchema = closedObject({
@@ -36,6 +53,10 @@ export const MissingScopeErrorDetailsSchema = closedObject({
 
 export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
+});
+
+export const OutboundDeliveryQueuedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED),
 });
 
 export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
@@ -49,6 +70,15 @@ export const UnknownAgentIdErrorDetailsSchema = closedObject({
   agentId: NonEmptyString,
 });
 
+export const SetupAdmissionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY),
+});
+
+export const GitHubPublicationSelectionRejectedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED),
+  idempotencyKey: NonEmptyString,
+});
+
 export const WizardNotFoundErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.WIZARD_NOT_FOUND),
 });
@@ -60,14 +90,51 @@ export const ProjectCloneErrorDetailsSchema = closedObject({
   }),
 });
 
+export const SessionWorkspaceRecoveryRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED),
+  cause: Type.Literal("device_offline"),
+  recoveryAction: Type.Literal("continue_on_gateway"),
+  sessionId: NonEmptyString,
+  source: closedObject({
+    generation: Type.Integer({ minimum: 0 }),
+    environmentId: NonEmptyString,
+    ownerEpoch: Type.Integer({ minimum: 1 }),
+  }),
+});
+
+/** Structured details emitted by method-level failures. */
+export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED),
+  cwd: NonEmptyString,
+});
+
+export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED),
+  warning: NonEmptyString,
+});
+
+export const ClawReviewRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED),
+  kind: Type.Union([Type.Literal("plugin"), Type.Literal("skill")]),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
+  CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  TaskWorktreeSourceRequiredErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  ClawReviewRequiredErrorDetailsSchema,
+  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

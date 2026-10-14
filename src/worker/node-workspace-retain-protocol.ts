@@ -1,10 +1,12 @@
 import { z } from "zod";
 
-const REQUEST_MAX_BYTES = 1024 * 1024;
+export const NODE_WORKER_RETAIN_REQUEST_MAX_BYTES = 1024 * 1024;
 const RETAIN_MAX_ENTRIES = 4_096;
 const MANIFEST_REFS_MAX_ENTRIES = 32;
+export const NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES = 4_096;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 
 const BoundedIdentifierSchema = z
   .string()
@@ -15,40 +17,68 @@ const BoundedIdentifierSchema = z
 const ManifestRefsSchema = z
   .array(z.string().regex(MANIFEST_REF_PATTERN))
   .max(MANIFEST_REFS_MAX_ENTRIES)
-  .superRefine((refs, context) => {
-    if (new Set(refs).size !== refs.length) {
-      context.addIssue({ code: "custom", message: "manifestRefs must not contain duplicates" });
-    }
-  })
+  .refine((refs) => new Set(refs).size === refs.length, "manifestRefs must not contain duplicates")
   .transform((refs) => refs.toSorted())
   .nullable();
 
-const RetainEntrySchema = z
-  .object({
-    environmentId: BoundedIdentifierSchema,
-    sessionId: BoundedIdentifierSchema,
-    generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-    manifestRefs: ManifestRefsSchema,
-  })
-  .strict();
+const RetainEntrySchema = z.strictObject({
+  environmentId: BoundedIdentifierSchema,
+  sessionId: BoundedIdentifierSchema,
+  generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  manifestRefs: ManifestRefsSchema,
+});
+
+const BundleHashesSchema = z
+  .array(z.string().regex(BUNDLE_HASH_PATTERN))
+  .max(NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES)
+  .refine(
+    (hashes) => new Set(hashes).size === hashes.length,
+    "bundleHashes must not contain duplicates",
+  )
+  .transform((hashes) => hashes.toSorted());
 
 const RetainInputSchema = z
-  .object({
+  .strictObject({
     version: z.literal(1),
     gatewayNamespace: BoundedIdentifierSchema.regex(GATEWAY_NAMESPACE_PATTERN),
     controllerId: BoundedIdentifierSchema.max(128),
     sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     retain: z.array(RetainEntrySchema).max(RETAIN_MAX_ENTRIES),
+    bundleHashes: BundleHashesSchema.optional(),
+    acknowledgedBundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    bundleStatusHash: z.string().regex(BUNDLE_HASH_PATTERN).optional(),
   })
-  .strict();
+  .superRefine((input, context) => {
+    if (input.acknowledgedBundleGeneration !== undefined && input.bundleHashes === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "acknowledgedBundleGeneration requires bundleHashes",
+      });
+    }
+    if (
+      input.bundleStatusHash !== undefined &&
+      !input.bundleHashes?.includes(input.bundleStatusHash)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "bundleStatusHash must be retained by bundleHashes",
+      });
+    }
+  });
 
-const RetainResultSchema = z
-  .object({
-    applied: z.boolean(),
-    deleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    hasMore: z.boolean(),
-  })
-  .strict();
+const BundleStatusSchema = z.strictObject({
+  bundleHash: z.string().regex(BUNDLE_HASH_PATTERN),
+  status: z.enum(["installed", "missing"]),
+});
+
+const RetainResultSchema = z.strictObject({
+  applied: z.boolean(),
+  deleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  hasMore: z.boolean(),
+  bundleDeleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  bundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  bundleStatus: BundleStatusSchema.optional(),
+});
 
 export type NodeWorkerWorkspaceRetainEntry = z.infer<typeof RetainEntrySchema>;
 export type NodeWorkerWorkspaceRetainInput = z.infer<typeof RetainInputSchema>;
@@ -57,7 +87,7 @@ export type NodeWorkerWorkspaceRetainResult = z.infer<typeof RetainResultSchema>
 export function parseNodeWorkerWorkspaceRetainInput(
   raw?: string | null,
 ): NodeWorkerWorkspaceRetainInput {
-  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_RETAIN_REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace retain request");
   }
   try {

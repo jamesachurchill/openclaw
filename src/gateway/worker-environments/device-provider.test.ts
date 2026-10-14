@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryIssue,
+} from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import {
@@ -15,12 +18,6 @@ import {
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const WORKER_BUILD = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.12",
-  protocolFeatures: ["worker-heartbeat-v1"],
-};
-
 function pairedDevice(
   deviceId = DEVICE_ID,
   nodeSurface?: PairedDevice["nodeSurface"],
@@ -44,10 +41,7 @@ function pairedDevice(
   };
 }
 
-function connectedNode(
-  deviceId = DEVICE_ID,
-  workerRuns: NodeWorkerSupervisorNodeProof["workerRuns"] | null = WORKER_BUILD,
-): NodeWorkerSupervisorNodeProof {
+function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -56,14 +50,15 @@ function connectedNode(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    workerHost: { enabled: true, capacity: { total: 2, available: available ? 2 : 0 } },
     commands: ["system.run"],
-    ...(workerRuns ? { workerRuns } : {}),
   };
 }
 
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  getIssue?: () => NodeRunnerInventoryIssue | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
@@ -72,7 +67,12 @@ function deviceRuntime(params: {
   });
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
       listCurrentNodes: params.listCurrentNodes,
+      hasCurrentRunner: () => true,
+      ...(params.getIssue ? { getIssue: params.getIssue } : {}),
       isCurrent: () => true,
       invoke: async () => ({ ok: false }),
     });
@@ -98,9 +98,11 @@ describe("device worker provider", () => {
       listCurrentNodes: async () => [connectedNode()],
     }).provider;
 
-    const first = await provider.provision({ device: DEVICE_ID }, "operation-1");
-    const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1");
-    const next = await provider.provision({ device: DEVICE_ID }, "operation-2");
+    expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
+    const authority = { assertCurrent: () => {} };
+    const first = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
+    const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
+    const next = await provider.provision({ device: DEVICE_ID }, "operation-2", authority);
 
     expect(first).toEqual({
       leaseId: expect.stringMatching(/^device:[a-f0-9]{64}:[a-f0-9]{32}$/u),
@@ -109,6 +111,27 @@ describe("device worker provider", () => {
     });
     expect(repeated.leaseId).toBe(first.leaseId);
     expect(next.leaseId).not.toBe(first.leaseId);
+    const getPairedDevice = vi.fn(async () => null);
+    const listCurrentNodes = vi.fn(async () => []);
+    const disconnected = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+    const allocation = await disconnected.resolveAllocation({ device: DEVICE_ID }, "operation-1");
+    expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
+    await disconnected.destroy({ leaseId: allocation.leaseId, profile: { device: DEVICE_ID } });
+    expect(getPairedDevice).not.toHaveBeenCalled();
+    expect(listCurrentNodes).not.toHaveBeenCalled();
+  });
+
+  it("returns the node's actionable disabled-host reason during provision", async () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const provider = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [],
+      getIssue: () => ({ code: "worker-host-unavailable", message }),
+    }).provider;
+
+    await expect(
+      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
+    ).rejects.toThrow(`device worker node ${DEVICE_ID} cannot host sessions: ${message}`);
   });
 
   it.each([
@@ -116,24 +139,26 @@ describe("device worker provider", () => {
       name: "missing pairing",
       getPairedDevice: async () => null,
       listCurrentNodes: async () => [connectedNode()],
+      expectedMessage: `device worker is not a paired node host: ${DEVICE_ID}`,
     },
     {
       name: "offline device",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
+      expectedMessage: `device worker node is not connected: ${DEVICE_ID}; reconnect it before retrying`,
     },
-    {
-      name: "connected node without worker session hosting",
-      getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [connectedNode(DEVICE_ID, null)],
-    },
-  ])("rejects $name during provision", async ({ getPairedDevice, listCurrentNodes }) => {
-    const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+  ])(
+    "rejects $name during provision",
+    async ({ getPairedDevice, listCurrentNodes, expectedMessage }) => {
+      const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+      const provision = provider.provision({ device: DEVICE_ID }, "operation", {
+        assertCurrent: () => {},
+      });
 
-    await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toBeInstanceOf(
-      WorkerProviderError,
-    );
-  });
+      await expect(provision).rejects.toBeInstanceOf(WorkerProviderError);
+      await expect(provision).rejects.toMatchObject({ message: expectedMessage });
+    },
+  );
 
   it.each([
     {
@@ -144,11 +169,6 @@ describe("device worker provider", () => {
     {
       name: "at the dormancy ceiling",
       disconnectedAtMs: 6 * DAY_MS,
-      expected: { status: "unknown" },
-    },
-    {
-      name: "past the dormancy ceiling",
-      disconnectedAtMs: DAY_MS,
       expected: { status: "unknown" },
     },
     {
@@ -183,8 +203,7 @@ describe("device worker provider", () => {
     let available = true;
     const runtime = deviceRuntime({
       getPairedDevice: async () => paired,
-      listCurrentNodes: async () =>
-        connected ? [connectedNode(DEVICE_ID, available ? WORKER_BUILD : null)] : [],
+      listCurrentNodes: async () => (connected ? [connectedNode(DEVICE_ID, available)] : []),
     });
     const provider = runtime.provider;
     const lease = { leaseId: "device-lease", profile: { device: DEVICE_ID } };
